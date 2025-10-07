@@ -1,95 +1,89 @@
 package vn.iotstar.service;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.Table;
-import org.hibernate.annotations.UpdateTimestamp;
-import org.hibernate.mapping.Collection;
-import org.springframework.data.annotation.Id;
-import org.springframework.security.core.GrantedAuthority;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
+
+import javax.crypto.SecretKey;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Service;
 
-import java.sql.Date;
-import java.util.List;
 
-@AllArgsConstructor
-@NoArgsConstructor
-@Data
-@Entity
-@Table(name = "users")
-public class User implements UserDetails {
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
 
-    private static final long serialVersionUID = 1L;
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
-    @Column(nullable = false)
-    private Integer id;
+@Service
+public class JwtService {
+    @Value("${security.jwt.secret-key}")
+    private String secretKey;
 
-    @Column(nullable = false, columnDefinition = "nvarchar(50)")
-    private String fullName;
+    @Value("${security.jwt.expiration-time}")
+    private long jwtExpiration;
 
-    @Column(unique = true, length = 100, nullable = false)
-    private String email;
-
-    @Column(columnDefinition = "nvarchar(500)", nullable = false)
-    private String images;
-
-    @Column(nullable = false)
-    private String password;
-
-    @CreationTimestamp
-    @Column(updatable = false, name = "created_at")
-    private Date createdAt;
-
-    @UpdateTimestamp
-    @Column(name = "updated_at")
-    private Date updatedAt;
-
-    // ==============================
-    // Implement UserDetails methods
-    // ==============================
-
-    @Override
-    public Collection<? extends GrantedAuthority> getAuthorities() {
-        // TODO: sau này bạn nên map Role/Permission
-        return List.of();
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
     }
 
-    @Override
-    public String getPassword() {
-        return password;
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
     }
 
-    @Override
-    public String getUsername() {
-        // Ở đây bạn chọn login bằng email
-        return email;
+    public String generateToken(UserDetails userDetails) {
+        return generateToken(new HashMap<>(), userDetails);
     }
 
-    @Override
-    public boolean isAccountNonExpired() {
-        return true;
+    public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails) {
+        return buildToken(extraClaims, userDetails, jwtExpiration);
     }
 
-    @Override
-    public boolean isAccountNonLocked() {
-        return true;
+    public long getExpirationTime() {
+        return jwtExpiration;
     }
 
-    @Override
-    public boolean isCredentialsNonExpired() {
-        return true;
+    private String buildToken(Map<String, Object> extraClaims,
+                              UserDetails userDetails,
+                              long expiration) {
+        return Jwts.builder()
+                .claims(extraClaims)
+                .subject(userDetails.getUsername())
+                .issuedAt(new Date(System.currentTimeMillis()))
+                // ở đây bạn có thể dùng expiration thay cho hard-code 30h
+                .expiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 30))
+                .signWith(getSignInKey(), Jwts.SIG.HS256)
+                .compact();
     }
 
-    @Override
-    public boolean isEnabled() {
-        return true;
+    public boolean isTokenValid(String token, UserDetails userDetails) {
+        final String username = extractUsername(token);
+        return (username.equals(userDetails.getUsername())) && !isTokenExpired(token);
     }
+
+    private boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+
+    private Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser()
+                .verifyWith(getSignInKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+
+    private SecretKey getSignInKey() {
+        byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
+
 }
